@@ -117,6 +117,7 @@ def main():
     )
 
     #Determines if the object is blinking or not
+    #4 blinks in the 90 frame history (Maybe an issue)
     blinking = (len(init.brightness_history) == init.HISTORY_SIZE and transitions >= 4)	
 
     #We set last position to this position when it is BOTH blinking and IR light
@@ -130,6 +131,7 @@ def main():
     #If we have not detcted blinking of the IR in 90 frames, the last point we saw it is irrelevant since we are now off course
     if (sum(init.brightness_history) == 0 and len(init.brightness_history) == init.HISTORY_SIZE):
         init.last_position = None
+        init.last_radius = None
 
     # -----------------------------
     # DISPLAY TRACKING
@@ -174,8 +176,7 @@ def main():
             2
         )
 
-    # Calculates how far the detected object is from the center of the camera frame
-    ##MOST IMPORTANT PART##
+    #Calculates how far the detected object is from the center of the camera frame
         dx = x - init.center_x
         dy = y - init.center_y
         distance = np.sqrt(dx**2 + dy**2)
@@ -190,7 +191,7 @@ def main():
         )
 
         #Returns the distance of the vector
-        return (dx,dy,distance,distance_radius)
+        return (dx,dy,distance,init.last_radius)
 
     else:
         #If no blinking or we have no last position we are going to let them know we cant find and IR source
