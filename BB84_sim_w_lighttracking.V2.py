@@ -67,6 +67,8 @@ def Bobs_bits(A_bits, A_bases, B_bases, f):
             if eve_basis != basis: 
                 bit = int(rng.integers(0,2))
             basis = eve_basis 
+        if basis != B_bases[i]: 
+            bit = int(rng.intergers(0,2))
 
         B_bits.append(bit)
 
@@ -131,9 +133,9 @@ def bb84(n, f, Percent_revealed, r, w): #YOU NEED TO CHANGE R AND W TO WHATEVER 
 
 
 #Call main OpenCV code for vectors and positons
-dx, dy, move_vector, radius = open_CV_Code.main
+dx, dy, move_vector, radius = open_CV_Code.main()
 
-bb84(1000, f=0.25, r=move_vector, w=radius)
+bb84(1000, f=0.25, Percent_revealed=0.25, r=move_vector, w=radius)
 
 #f is a frcation of how many photons eve may grab (0.2 = 1 in 5 photons)
 #r = is how many pixel the camera is from the center 
