@@ -1,3 +1,4 @@
+import main as open_CV_Code
 import numpy as np
 import math
 rng = np.random.default_rng()
@@ -111,7 +112,8 @@ def final_key(A_key, tested_vals, QBER, threshold = 0.11):
 #now set itup so it can run in a loop
 #n = number of intial bits
 #E = 1/ E chance of eve being present
-def bb84(n, f, Percent_revealed =0.25, r=0, w=100): #YOU NEED TO CHANGE R AND W TO WHATEVER SOPHIE OUTPUTS IT AS 
+
+def bb84(n, f, Percent_revealed, r, w): #YOU NEED TO CHANGE R AND W TO WHATEVER SOPHIE OUTPUTS IT AS 
     A_bits = Alice_bits(n)
     A_bits, lost_bits, N = photon_loss(A_bits, r, w)
     n = len(A_bits) 
@@ -128,7 +130,10 @@ def bb84(n, f, Percent_revealed =0.25, r=0, w=100): #YOU NEED TO CHANGE R AND W 
 
 
 
-bb84(1000, f=0.25, r=10, w=100)
+#Call main OpenCV code for vectors and positons
+dx, dy, move_vector, radius = open_CV_Code.main
+
+bb84(1000, f=0.25, r=move_vector, w=radius)
 
 #f is a frcation of how many photons eve may grab (0.2 = 1 in 5 photons)
 #r = is how many pixel the camera is from the center 
