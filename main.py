@@ -101,7 +101,6 @@ def main():
 
             #Calculate vector length
             distance_radius = np.sqrt(dxR**2 + dyR**2)
-            init.last_radius = distance_radius
 
     # -----------------------------
     # CHECK BLINKING
@@ -123,6 +122,7 @@ def main():
     #We set last position to this position when it is BOTH blinking and IR light
     if(blinking == True and detected == True):
         init.last_position = (x, y)
+        init.last_radius = distance_radius
 
     #Makes sure the deque is completely full (We want all 30 comparisons)
 	#There must be at least 4 changes between detected and not detected
