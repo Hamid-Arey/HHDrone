@@ -117,7 +117,7 @@ def main():
     )
 
     #Determines if the object is blinking or not
-    #4 blinks in the 90 frame history (Maybe an issue)
+    #4 transitions is 2 complete blinks so 2 blinks per 90 frames
     blinking = (len(init.brightness_history) == init.HISTORY_SIZE and transitions >= 4)	
 
     #We set last position to this position when it is BOTH blinking and IR light
