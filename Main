@@ -1,0 +1,26 @@
+import numpy as np 
+import matplotlib.pyplot as plt 
+import time
+
+#dont forget to deleet the calls at the end of the bb84 file 
+#delete print line in bb84 to avoid clutter when running
+
+runtime = 120 
+int = 1 
+
+#from bb84 
+n = 1000
+f = 0.25
+Percent_revealed = 0.25
+
+runtime = []
+QBER_list = []
+key_length_list = []
+r_list = []
+w_list = []
+
+start = time.time()
+
+for seconds in range(runtime):
+    loop_start = time.time()
+
