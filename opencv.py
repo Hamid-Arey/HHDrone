@@ -2,13 +2,13 @@ import cv2
 import numpy as np
 import OpenCV_initialization as init
 
-def main():
+def main(show=False):
 
     #Capture frame
-    frame = init.picam2.capture_array()
+    frame = init.start_camera().capture_array()
 
     #Convert to grayscale (Makes it simpler since it does not have to process as many color brightnesses)
-    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     #Reduce image noise (Blurs the image slightly to get rid of outcast pixels)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -120,16 +120,12 @@ def main():
     #4 transitions is 2 complete blinks so 2 blinks per 90 frames
     blinking = (len(init.brightness_history) == init.HISTORY_SIZE and transitions >= 4)	
 
-    #We set last position to this position when it is BOTH blinking and IR light
-    if(blinking == True and detected == True):
+    # Only current, confirmed detections can command the gimbal. During
+    # the off phase of blinking, hold position rather than reusing old errors.
+    if blinking and detected:
         init.last_position = (x, y)
         init.last_radius = distance_radius
-
-    #Makes sure the deque is completely full (We want all 30 comparisons)
-	#There must be at least 4 changes between detected and not detected
-
-    #If we have not detcted blinking of the IR in 90 frames, the last point we saw it is irrelevant since we are now off course
-    if (sum(init.brightness_history) == 0 and len(init.brightness_history) == init.HISTORY_SIZE):
+    else:
         init.last_position = None
         init.last_radius = None
 
@@ -190,14 +186,25 @@ def main():
             f"Blinking: {blinking}"
         )
 
+        if show:
+            cv2.imshow("IR tracking", display)
+
         #Returns the distance of the vector
         return (dx,dy,distance,init.last_radius)
 
     else:
         #If no blinking or we have no last position we are going to let them know we cant find and IR source
-        print("Nothing Detected")
+        if show:
+            cv2.imshow("IR tracking", display)
         return (None,None,None,None)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        while True:
+            main(show=True)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        init.close_program()
+        cv2.destroyAllWindows()

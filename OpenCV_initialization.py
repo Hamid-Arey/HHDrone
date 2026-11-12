@@ -10,7 +10,7 @@ from picamera2 import Picamera2
 #We are initializing the variables here
 WIDTH = 640
 HEIGHT = 480
-FPS = 90
+FPS = 60  # Starting target for Pi 4B + NoIR V2 tracking and preview
 
 # Brightness threshold for IR detection
 IR_THRESHOLD = 220
@@ -19,37 +19,38 @@ IR_THRESHOLD = 220
 BLINK_FREQUENCY = 5
 
 # Number of recent frames used to check blinking
-HISTORY_SIZE = 90
+HISTORY_SIZE = FPS  # Approximately one second at the requested frame rate
 
 
 # -----------------------------
 # INITIALIZE CAMERA
 # -----------------------------
-picam2 = Picamera2()
+picam2 = None
 
-#Configures the camera
-config = picam2.create_video_configuration(
 
-#Setting the video resolution and format
-    main={
-        "size": (WIDTH, HEIGHT),
-        "format": "RGB888" #How the video data is formatted (3 color components RGB)
-    },
+def start_camera():
+    """Open one shared camera, only when tracking starts."""
+    global picam2, last_position, last_radius
+    if picam2 is not None:
+        return picam2
+    camera = Picamera2()
+    try:
+        config = camera.create_video_configuration(
+            main={"size": (WIDTH, HEIGHT), "format": "RGB888"},
+            controls={"FrameRate": FPS},
+        )
+        camera.configure(config)
+        camera.start()
+        time.sleep(2)
+    except BaseException:
+        camera.close()
+        raise
+    brightness_history.clear()
+    last_position = None
+    last_radius = None
+    picam2 = camera
+    return camera
 
-#Sets the desired frame rate
-    controls={
-        "FrameRate": FPS
-    }
-)
-
-#Telling the camera to use above settings when running the camera
-picam2.configure(config)
-
-#Starting the camera
-picam2.start()
-
-#Pauses the program to give the camera time to boot up
-time.sleep(2)
 
 # -----------------------------
 # TRACKING VARIABLES
@@ -68,9 +69,10 @@ brightness_history = deque(maxlen=HISTORY_SIZE)
 
 
 def close_program():
-
-    #This closes the openCV windows and the camera 
-    picam2.stop()
-    cv2.destroyAllWindows()
-
-    print("IR tracker stopped")
+    global picam2
+    camera, picam2 = picam2, None
+    if camera is not None:
+        try:
+            camera.stop()
+        finally:
+            camera.close()
