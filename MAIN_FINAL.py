@@ -1,3 +1,4 @@
+import OpenCV_initialization as end
 import numpy as np 
 import matplotlib.pyplot as plt 
 import time
@@ -53,5 +54,5 @@ for second in range(runtime):
                str(QBER_list[i]) + "," + str(key_length_list[i]) + "," + str(useful_list[i]) + "\n")
     file.close()
 
-    
+end.close_program()
 
