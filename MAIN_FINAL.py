@@ -1,59 +1,82 @@
 """One camera loop for IR tracking, optional gimbal control, and BB84 logging."""
 import argparse
 import csv
+from math import isfinite
 import time
 
 import BB84
 
 
+def key_metrics(qber, key_length, w, sampling_rate_hz):
+    """Return acceptance, usability, and modeled 8-bit keys/second.
+
+    The inverse-area width penalty is an uncalibrated simulation assumption.
+    Sampling rate is the BB84 batch rate, not the requested camera FPS.
+    """
+    accepted = isfinite(qber) and 0 <= qber < 0.11
+    useful = accepted and key_length >= 8
+    rate = 0.0
+    if (useful and w is not None and isfinite(w) and w > 0
+            and isfinite(sampling_rate_hz) and sampling_rate_hz > 0):
+        rate = (key_length // 8) * sampling_rate_hz / (1 + w * w)
+    return accepted, useful, rate
+
+
 def run(runtime=120, interval=1.0, show=True, servos=True, output="results.csv",
-        invert_pan=False, invert_tilt=False, kp=0.10, kd=0.002,
-        pin_numbering="bcm"):
+        invert_pan=False, pin_numbering="bcm", kp=0.8, kd=0.01,
+        invert_tilt=False):
     if pin_numbering not in ("bcm", "physical"):
         raise ValueError("pin_numbering must be bcm or physical")
-    if kp < 0 or kd < 0:
-        raise ValueError("PD gains must be nonnegative")
-    if runtime <= 0 or interval <= 0:
+    if servos and pin_numbering != "bcm":
+        raise ValueError("Hardware PWM uses BCM GPIO12/GPIO13 (header pins 32/33); use --pin-numbering bcm")
+    if not all(isfinite(v) and v > 0 for v in (runtime, interval)):
         raise ValueError("runtime and interval must be positive")
+    if not all(isfinite(v) and v >= 0 for v in (kp, kd)):
+        raise ValueError("PD gains must be finite and nonnegative")
     import OpenCV_initialization as camera
     import opencv
 
     gimbal = None
-    pin_factory = None
     try:
         if servos:
-            from pd_controller import ScratchPDController, configure_servo_pwm
-            pin_factory = configure_servo_pwm()
-            gimbal = ScratchPDController(
-                kp, kd, max_speed=15,
-                pan_pin="BOARD12" if pin_numbering == "physical" else "GPIO12",
-                tilt_pin="BOARD13" if pin_numbering == "physical" else "GPIO13",
-                pan_direction=1 if invert_pan else -1,
-                tilt_direction=-1 if invert_tilt else 1,
+            from pd_controller import PDTrackingController
+            gimbal = PDTrackingController(
+                pan_pin="GPIO12",
+                tilt_pin="GPIO13",
+                pan_direction=-1 if invert_pan else 1,
+                tilt_direction=1 if invert_tilt else -1,
+                kp=kp, kd=kd,
             )
         camera.start_camera()
         if show:
             opencv.cv2.namedWindow("IR tracking", opencv.cv2.WINDOW_NORMAL)
         start = time.monotonic()
         next_sample = start
+        previous_sample = None
         with open(output, "w", newline="") as file:
             writer = csv.writer(file)
-            writer.writerow(["second", "r", "w", "QBER", "key_length", "useful"])
+            writer.writerow(["second", "x", "y", "dx", "dy", "r", "w", "QBER", "key_length", "useful",
+                             "qber_below_11_percent", "sampling_rate_hz",
+                             "estimated_useful_keys_per_second"])
             while time.monotonic() - start < runtime:
                 dx, dy, distance, radius = opencv.main(show=show)
                 if gimbal is not None:
-                    if dx is not None:
-                        gimbal.update_position(dx, dy)
-                    else:
-                        gimbal.reset()
+                    gimbal.update(dx, dy, target_locked=camera.blink_tracker.is_locked)
                 now = time.monotonic()
                 if now >= next_sample:
                     key, _, _, qber = BB84.bb84(
                         1000, 0.25, 0.25, distance, radius
                     )
-                    writer.writerow([round(now - start, 3), distance, radius,
-                                     qber, len(key), len(key) >= 8])
+                    sample_period = interval if previous_sample is None else now - previous_sample
+                    sampling_rate = 1.0 / sample_period
+                    accepted, useful, rate = key_metrics(qber, len(key), radius, sampling_rate)
+                    x = camera.center_x + dx if dx is not None else None
+                    y = camera.center_y + dy if dy is not None else None
+                    writer.writerow([round(now - start, 3), x, y, dx, dy, distance, radius,
+                                     qber, len(key), str(useful).upper(),
+                                     str(accepted).upper(), sampling_rate, rate])
                     file.flush()
+                    previous_sample = now
                     next_sample = now + interval
                 if show:
                     if opencv.cv2.waitKey(1) & 0xFF == ord("q"):
@@ -68,8 +91,6 @@ def run(runtime=120, interval=1.0, show=True, servos=True, output="results.csv",
             try:
                 camera.close_program()
             finally:
-                if pin_factory is not None:
-                    pin_factory.close()
                 if show:
                     opencv.cv2.destroyAllWindows()
 
@@ -84,16 +105,16 @@ def main():
     parser.set_defaults(show=True)
     parser.add_argument("--no-servos", action="store_true")
     parser.add_argument("--output", default="results.csv")
-    parser.add_argument("--invert-pan", action="store_true", help="Reverse horizontal servo direction")
-    parser.add_argument("--invert-tilt", action="store_true", help="Reverse vertical servo direction")
-    parser.add_argument("--kp", type=float, default=0.10, help="Proportional gain (degrees/second/pixel)")
-    parser.add_argument("--kd", type=float, default=0.002, help="Derivative gain (degrees/pixel)")
+    parser.add_argument("--invert-pan", action="store_true", help="Reverse pan tracking and initial sweep direction")
+    parser.add_argument("--invert-tilt", action="store_true", help="Reverse tilt tracking direction")
+    parser.add_argument("--kp", type=float, default=0.8, help="Proportional gain (degrees/second/pixel)")
+    parser.add_argument("--kd", type=float, default=0.01, help="Derivative gain (degrees/pixel)")
     parser.add_argument("--pin-numbering", choices=("bcm", "physical"), default="bcm",
-                        help="Numbering for pan pin 12 and tilt pin 13 (default: bcm)")
+                        help="Hardware PWM requires bcm: GPIO12/GPIO13 (header pins 32/33)")
     args = parser.parse_args()
     try:
         run(args.runtime, args.interval, args.show, not args.no_servos, args.output,
-            args.invert_pan, args.invert_tilt, args.kp, args.kd, args.pin_numbering)
+            args.invert_pan, args.pin_numbering, args.kp, args.kd, args.invert_tilt)
     except KeyboardInterrupt:
         pass
 

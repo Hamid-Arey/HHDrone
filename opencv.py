@@ -1,3 +1,5 @@
+import logging
+
 import cv2
 import numpy as np
 import OpenCV_initialization as init
@@ -5,13 +7,13 @@ import OpenCV_initialization as init
 def main(show=False):
 
     #Capture frame
-    frame = init.start_camera().capture_array()
+    frame, now = init.capture_timed_frame()
 
     #Convert to grayscale (Makes it simpler since it does not have to process as many color brightnesses)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     #Reduce image noise (Blurs the image slightly to get rid of outcast pixels)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
 
     # Threshold bright IR sources (Examines every pixel in the image and compares its brightness to the brightness threshold)
     #If pixel is greater than threshold then it becomes white other wise black  
@@ -22,14 +24,7 @@ def main(show=False):
         cv2.THRESH_BINARY 	#Applies the threshold color switch
     )
 
-    # Remove small noise (Creates a 3x3 matrix filed with 1’s which will be used to get rid of small noise)
-    Kernel = np.ones((3, 3), np.uint8)
-
-    threshold = cv2.morphologyEx(	#Changes shapes of regions in a binary image
-        threshold,
-        cv2.MORPH_OPEN,		        #Shrinks white regions (removing small white dots) and expands remaining white
-        Kernel		                #The matrix used to check the surrounding pixels to check for this noise
-    )
+    # Reject tiny contours below instead of eroding a small/moving LED away.
 
     # Find bright objects (Finds the outline of the bright objects)
     #Contour is the outline of a connected group of white pixels in your binary image 
@@ -39,164 +34,55 @@ def main(show=False):
         cv2.CHAIN_APPROX_SIMPLE		#Simplifies the contour stores only important boundary points
     )
 
-    #Keeps track of if the light has IR source has been detected
-    detected = False
-
-    #Initialize variables to find biggest contour and largest area
-    best_contour = None
-    largest_area = 0
-
-    # Find largest bright object
-    #Find contours returns a collection of contours this is how we got them
+    detections = []
     for contour in contours:
+        if cv2.contourArea(contour) <= 2:
+            continue
+        moments = cv2.moments(contour)
+        if moments["m00"] == 0:
+            continue
+        x = int(moments["m10"] / moments["m00"])
+        y = int(moments["m01"] / moments["m00"])
+        points = contour.reshape(-1, 2)
+        radius = float(np.min(np.hypot(points[:, 0] - x, points[:, 1] - y)))
+        detections.append((x, y, radius))
 
-    #Calculates area enclosed in contour
-        area = cv2.contourArea(contour)
-
-
-    #Just finding the biggest contour (Isn't this flawed since there could be a bigger contour and it not be the correct source)
-        if area > largest_area and area > 2:
-            largest_area = area
-            best_contour = contour
-
-    # -----------------------------
-    # CALCULATE LED POSITION
-    # -----------------------------
-
-    #This section calculates the coordinates of the largest bright region
-    if best_contour is not None:		#Make sure you actually have one
-        M = cv2.moments(best_contour)	#Gets moments (Essentially the shape and position of a region (Uses to get regions center)
-
-        #Makes sure the area is not zero (Since is will be dividing by zero)
-        if M["m00"] != 0:
-
-            #Calculates the center of the brightest region
-            x = int(M["m10"] / M["m00"])
-            y = int(M["m01"] / M["m00"])
-
-            #determines detected as true
-            detected = True
-
-            ##Getting the radius from center of bright light to its closest radius##
-
-            ## ---------------------------------------------##
-
-           #Get all points along the blob's outer boundary
-            contour_points = best_contour.reshape(-1, 2)
-
-            #Calculate distance from each boundary point to blob centre
-            distances = np.sqrt(
-                (contour_points[:, 0] - x)**2 +
-                (contour_points[:, 1] - y)**2
-            )
-
-            #Find the closest boundary point to the blob centre
-            closest_index = np.argmin(distances)
-
-            edge_x, edge_y = contour_points[closest_index]
-
-            #Calculate vector from blob centre to its boundary
-            dxR = int(edge_x) - x
-            dyR = int(edge_y) - y
-
-            #Calculate vector length
-            distance_radius = np.sqrt(dxR**2 + dyR**2)
-
-    # -----------------------------
-    # CHECK BLINKING
-    # -----------------------------
-
-    #Adds value to the deque if a brightest region was detected (Store 0 or 1)
-    init.brightness_history.append(1 if detected else 0)
-
-    #This detects how many times the brightness changes between consecutive frames (Sum adds up all the results up (1,0))
-    #Essentially counts as the amount of transitions
-    transitions = sum(
-        init.brightness_history[i] != init.brightness_history[i - 1]
-        for i in range(1, len(init.brightness_history))
-    )
-
-    #Determines if the object is blinking or not
-    #4 transitions is 2 complete blinks so 2 blinks per 90 frames
-    blinking = (len(init.brightness_history) == init.HISTORY_SIZE and transitions >= 4)	
-
-    # Only current, confirmed detections can command the gimbal. During
-    # the off phase of blinking, hold position rather than reusing old errors.
-    if blinking and detected:
+    target = init.blink_tracker.update(detections, now)
+    init.update_tracking_exposure(target is not None, init.blink_tracker.is_locked, now)
+    if target is not None:
+        x, y, radius = target
         init.last_position = (x, y)
-        init.last_radius = distance_radius
+        init.last_radius = radius
     else:
         init.last_position = None
         init.last_radius = None
 
-    # -----------------------------
-    # DISPLAY TRACKING
-    # -----------------------------
+    # Compute only from the fresh target. Predictions are for association only.
+    result = (None, None, None, None)
+    if target is not None:
+        x, y, radius = target
+        dx, dy = x - init.center_x, y - init.center_y
+        result = (dx, dy, float(np.hypot(dx, dy)), radius)
+        logging.debug("Target x=%d y=%d dx=%d dy=%d", x, y, dx, dy)
+    if not show:
+        return result
 
-    #Creating a copy of the current frame because when we draw we don't want to change the original image
     display = frame.copy()
-
-    #Draws a circle at the camera center
-    #Later, we can compare the detected IR LED's position (Last position) against this centre to see where the LED is relative to the camera's centre
-    cv2.circle(
-        display,
-        (init.center_x, init.center_y),
-        5,
-        (255, 0, 0),
-        -1
-    )
-
-    #This code draws a green circle around the last detected position of the object in your camera feed
-    #Makes sure we have a last position (Something was found)
-    #Possible we are using previous last_position because we did not find the light this time
-    if init.last_position is not None:
-
-    #Extracts coordinates from the positon
-        x, y = init.last_position
-
-    # Draw circle detected position
-        cv2.circle(
-            display,
-            (x, y),
-            12,
-            (0, 255, 0),
-            2
-        )
-
-    # This code draws a blue line from the centre of the camera frame to the last detected position of the tracked object. 
-        cv2.line(
-            display,
-            (init.center_x, init.center_y),
-            (x, y),
-            (255, 0, 0),
-            2
-        )
-
-    #Calculates how far the detected object is from the center of the camera frame
-        dx = x - init.center_x
-        dy = y - init.center_y
-        distance = np.sqrt(dx**2 + dy**2)
-
-
-        #Prints tracking info onto the console
-        print(
-            f"X: {x:4d} | Y: {y:4d} | "
-            f"DX: {dx:4d} | DY: {dy:4d} | "
-            f"Distance: {distance:6.1f} px | "
-            f"Blinking: {blinking}"
-        )
-
-        if show:
-            cv2.imshow("IR tracking", display)
-
-        #Returns the distance of the vector
-        return (dx,dy,distance,init.last_radius)
-
-    else:
-        #If no blinking or we have no last position we are going to let them know we cant find and IR source
-        if show:
-            cv2.imshow("IR tracking", display)
-        return (None,None,None,None)
+    cv2.circle(display, (init.center_x, init.center_y), 5, (255, 0, 0), -1)
+    position = init.last_position
+    if position is None and init.blink_tracker.is_locked:
+        position = init.blink_tracker.locked['point'][:2]
+    if position is not None:
+        x, y = position
+        cv2.circle(display, (x, y), 12, (0, 255, 0), 2)
+        cv2.line(display, (init.center_x, init.center_y), (x, y), (0, 255, 255), 2)
+    state = "LOCKED" if init.blink_tracker.is_locked else "SEARCHING"
+    if init.tracking_hold_active and target is None:
+        state = "HOLDING - waiting for LED (5 s)"
+    cv2.putText(display, state, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, .6,
+                (0, 255, 255), 2)
+    cv2.imshow("IR tracking", display)
+    return result
 
 
 if __name__ == "__main__":
